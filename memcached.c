@@ -1091,7 +1091,7 @@ static void complete_incr_bin(conn *c) {
             /* Save some room for the response */
             rsp->message.body.value = htonll(req->message.body.initial);
             it = item_alloc(key, nkey, 0, realtime(req->message.body.expiration),
-                            INCR_MAX_STORAGE_LEN);
+                            INCR_MAX_STORAGE_LEN, -1); //TODO
 
             if (it != NULL) {
                 snprintf(ITEM_data(it), INCR_MAX_STORAGE_LEN, "%llu",
@@ -1673,7 +1673,7 @@ static void process_bin_sasl_auth(conn *c) {
     char *key = binary_get_key(c);
     assert(key);
 
-    item *it = item_alloc(key, nkey, 0, 0, vlen);
+    item *it = item_alloc(key, nkey, 0, 0, vlen, -1); //TODO
 
     if (it == 0) {
         write_bin_error(c, PROTOCOL_BINARY_RESPONSE_ENOMEM, vlen);
@@ -2016,7 +2016,7 @@ static void process_bin_update(conn *c) {
     }
 
     it = item_alloc(key, nkey, req->message.body.flags,
-            realtime(req->message.body.expiration), vlen+2);
+            realtime(req->message.body.expiration), vlen+2, -1); //TODO
 
     if (it == 0) {
         if (! item_size_ok(nkey, req->message.body.flags, vlen + 2)) {
@@ -2087,7 +2087,7 @@ static void process_bin_append_prepend(conn *c) {
         stats_prefix_record_set(key, nkey);
     }
 
-    it = item_alloc(key, nkey, 0, 0, vlen+2);
+    it = item_alloc(key, nkey, 0, 0, vlen+2, -1); //TODO
 
     if (it == 0) {
         if (! item_size_ok(nkey, 0, vlen + 2)) {
@@ -2329,7 +2329,8 @@ enum store_item_type do_store_item(item *it, int comm, conn *c, const uint32_t h
 
                 flags = (int) strtol(ITEM_suffix(old_it), (char **) NULL, 10);
 
-                new_it = item_alloc(key, it->nkey, flags, old_it->exptime, it->nbytes + old_it->nbytes - 2 /* CRLF */);
+                new_it = item_alloc(key, it->nkey, flags, old_it->exptime, it->nbytes + old_it->nbytes - 2 /* CRLF */,
+                                    old_it->weight);
 
                 if (new_it == NULL) {
                     /* SERVER_ERROR out of memory */
@@ -2785,7 +2786,7 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                       add_iov(c, ITEM_key(it), it->nkey) != 0 ||
                       add_iov(c, ITEM_suffix(it), it->nsuffix - 2) != 0 ||
                       add_iov(c, suffix, suffix_len) != 0 ||
-                      add_iov(c,(char*)&it->weight, sizeof(uint32_t))!=0 ||
+                          //  add_iov(c,(char*)&it->weight, sizeof(uint32_t))!=0 ||
                       add_iov(c, ITEM_data(it), it->nbytes) != 0)
                       {
                           item_remove(it);
@@ -2798,8 +2799,8 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                                         it->nbytes, ITEM_get_cas(it));
                   if (add_iov(c, "VALUE ", 6) != 0 ||
                       add_iov(c, ITEM_key(it), it->nkey) != 0 ||
-                      add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0 ||
-                      add_iov(c,(char*)&it->weight, sizeof(uint32_t))!=0)
+                      add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0
+                          )// add_iov(c,(char*)&it->weight, sizeof(uint32_t))!=0)
                             {
                           item_remove(it);
                           break;
@@ -2878,7 +2879,8 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     uint64_t req_cas_id=0;
     item *it;
 
-    uint32_t weight = -1;
+    uint32_t weight32 = -1;
+    uint8_t weight8 = -1;
 
     assert(c != NULL);
 
@@ -2914,8 +2916,15 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
+        if (ntokens > 7) {
+            if (!safe_strtoul(tokens[6].value, &weight32) || weight32 < 0 ||
+                weight32 > 255) {
+                out_string(c, "CLIENT_ERROR bad command line format");
+                return;
+            }
+        }
     } else if(ntokens>6){
-        if (!safe_strtoul(tokens[5].value, &weight)) {
+        if (!safe_strtoul(tokens[5].value, &weight32) || weight32<0 || weight32>255) {
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
@@ -2931,7 +2940,8 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
         stats_prefix_record_set(key, nkey);
     }
 
-    it = item_alloc(key, nkey, flags, realtime(exptime), vlen);
+    weight8 = weight32;
+    it = item_alloc(key, nkey, flags, realtime(exptime), vlen, weight8);
 
     if (it == 0) {
         if (! item_size_ok(nkey, flags, vlen))
@@ -2954,8 +2964,6 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
         return;
     }
-
-    it->weight = weight;
 
     ITEM_set_cas(it, req_cas_id);
 
@@ -3119,7 +3127,7 @@ enum delta_result_type do_add_delta(conn *c, const char *key, const size_t nkey,
     res = strlen(buf);
     if (res + 2 > it->nbytes || it->refcount != 1) { /* need to realloc */
         item *new_it;
-        new_it = item_alloc(ITEM_key(it), it->nkey, atoi(ITEM_suffix(it) + 1), it->exptime, res + 2 );
+        new_it = item_alloc(ITEM_key(it), it->nkey, atoi(ITEM_suffix(it) + 1), it->exptime, res + 2 ,it->weight);
         if (new_it == 0) {
             do_item_remove(it);
             return EOM;
@@ -3311,7 +3319,7 @@ static void process_command(conn *c, char *command) {
 
         process_get_command(c, tokens, ntokens, false);
 
-    } else if ((ntokens == 6 || ntokens == 7) &&
+    } else if ((ntokens == 6 || ntokens == 7 || ntokens==8) &&
                ((strcmp(tokens[COMMAND_TOKEN].value, "add") == 0 && (comm = NREAD_ADD)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "set") == 0 && (comm = NREAD_SET)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "replace") == 0 && (comm = NREAD_REPLACE)) ||

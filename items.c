@@ -78,18 +78,19 @@ uint64_t get_cas_id(void) {
  * Returns the total size of the header.
  */
 static size_t item_make_header(const uint8_t nkey, const int flags, const int nbytes,
-                     char *suffix, uint8_t *nsuffix) {
+                     char *suffix, uint8_t *nsuffix, const uint8_t weight) {
     /* suffix is defined at 40 chars elsewhere.. */
-    *nsuffix = (uint8_t) snprintf(suffix, 40, " %d %d\r\n", flags, nbytes - 2);
+    *nsuffix = (uint8_t) snprintf(suffix, 40, " %d %d %d\r\n", flags, nbytes - 2,weight);
     return sizeof(item) + nkey + *nsuffix + nbytes;
 }
 
 /*@null@*/
-item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_time_t exptime, const int nbytes) {
+item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_time_t exptime, const int nbytes
+            ,const uint8_t weight) {
     uint8_t nsuffix;
     item *it = NULL;
     char suffix[40];
-    size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix);
+    size_t ntotal = item_make_header(nkey + 1, flags, nbytes, suffix, &nsuffix, weight);
     if (settings.use_cas) {
         ntotal += sizeof(uint64_t);
     }
@@ -204,6 +205,7 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     it->exptime = exptime;
     memcpy(ITEM_suffix(it), suffix, (size_t)nsuffix);
     it->nsuffix = nsuffix;
+    it->weight=weight;
     return it;
 }
 
@@ -231,7 +233,7 @@ bool item_size_ok(const size_t nkey, const int flags, const int nbytes) {
     uint8_t nsuffix;
 
     size_t ntotal = item_make_header(nkey + 1, flags, nbytes,
-                                     prefix, &nsuffix);
+                                     prefix, &nsuffix, 1);
     if (settings.use_cas) {
         ntotal += sizeof(uint64_t);
     }
