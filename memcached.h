@@ -339,7 +339,7 @@ typedef struct _stritem {
     uint8_t         slabs_clsid;/* which slab class we're in */
     uint8_t         nkey;       /* key length, w/terminating null and padding */
 
-    unint32_t       weight;     /*item weight*/
+    uint32_t       weight;     /*item weight*/
 
     /* this odd type prevents type-punning issues when we do
      * the little shuffle to save space when not using CAS. */

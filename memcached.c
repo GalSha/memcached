@@ -185,7 +185,8 @@ static void stats_init(void) {
     process_started = time(0) - 2;
     stats_prefix_init();
 
-    stats.weight_on = stats.weight_percent = 0;
+    stats.weight_on = false;
+    stats.weight_percent = 0;
 }
 
 static void stats_reset(void) {
@@ -2914,7 +2915,7 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
             return;
         }
     } else if(ntokens>6){
-        if (!safe_strtoull(tokens[5].value, &weight)) {
+        if (!safe_strtoul(tokens[5].value, &weight)) {
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
