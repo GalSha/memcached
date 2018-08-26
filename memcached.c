@@ -4839,6 +4839,7 @@ int main (int argc, char **argv) {
           "I:"  /* Max item size */
           "S"   /* Sasl ON */
           "o:"  /* Extended generic options */
+          "W:"  /* Weight percent */
         ))) {
         switch (c) {
         case 'a':

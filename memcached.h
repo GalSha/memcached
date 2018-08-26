@@ -269,6 +269,9 @@ struct stats {
     bool          slab_reassign_running; /* slab reassign in progress */
     uint64_t      slabs_moved;       /* times slabs were moved around */
     uint64_t      slabs_shrunk;      /* times slabs were shrunk */
+
+    bool weight_on;         /*Whether weight option is on */
+    uint8_t weight_percent; /*How much percent does the weight have on invalidate consideration */
 };
 
 #define MAX_VERBOSITY_LEVEL 2
@@ -305,6 +308,7 @@ struct settings {
     bool slab_reassign;     /* Whether or not slab reassignment is allowed */
     int slab_automove;     /* Whether or not to automatically move slabs */
     int hashpower_init;     /* Starting hash power level */
+
 };
 
 extern struct stats stats;
