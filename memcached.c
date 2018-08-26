@@ -2919,7 +2919,6 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
-        it->weight = weight;
     }
 
     vlen += 2;
