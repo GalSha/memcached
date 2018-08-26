@@ -2784,6 +2784,7 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                       add_iov(c, ITEM_key(it), it->nkey) != 0 ||
                       add_iov(c, ITEM_suffix(it), it->nsuffix - 2) != 0 ||
                       add_iov(c, suffix, suffix_len) != 0 ||
+                      add_iov(c,(char*)&it->weight, sizeof(uint32_t))!=0 ||
                       add_iov(c, ITEM_data(it), it->nbytes) != 0)
                       {
                           item_remove(it);
@@ -2796,8 +2797,9 @@ static inline void process_get_command(conn *c, token_t *tokens, size_t ntokens,
                                         it->nbytes, ITEM_get_cas(it));
                   if (add_iov(c, "VALUE ", 6) != 0 ||
                       add_iov(c, ITEM_key(it), it->nkey) != 0 ||
-                      add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0)
-                      {
+                      add_iov(c, ITEM_suffix(it), it->nsuffix + it->nbytes) != 0 ||
+                      add_iov(c,(char*)&it->weight, sizeof(uint32_t))!=0)
+                            {
                           item_remove(it);
                           break;
                       }
@@ -2875,6 +2877,8 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
     uint64_t req_cas_id=0;
     item *it;
 
+    uint32_t weight = -1;
+
     assert(c != NULL);
 
     set_noreply_maybe(c, tokens, ntokens);
@@ -2909,6 +2913,12 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
+    } else if(ntokens>6){
+        if (!safe_strtoull(tokens[5].value, &weight)) {
+            out_string(c, "CLIENT_ERROR bad command line format");
+            return;
+        }
+        it->weight = weight;
     }
 
     vlen += 2;
@@ -2944,6 +2954,9 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
 
         return;
     }
+
+    it->weight = weight;
+
     ITEM_set_cas(it, req_cas_id);
 
     c->item = it;
@@ -4561,6 +4574,8 @@ static void usage(void) {
 #ifdef ENABLE_SASL
     printf("-S            Turn on Sasl authentication\n");
 #endif
+    printf("-W <num>      The percent which the weight parameter takes in the invalidate \n"
+                   "              decision.\n");
     printf("-o            Comma separated list of extended or experimental options\n"
            "              - (EXPERIMENTAL) maxconns_fast: immediately close new\n"
            "                connections if over maxconns limit\n"
