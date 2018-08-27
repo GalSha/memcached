@@ -4822,9 +4822,6 @@ int main (int argc, char **argv) {
         NULL
     };
 
-    bool weight_on = false;
-    uint8_t weight_percent = 0;
-
     if (!sanitycheck()) {
         return EX_OSERR;
     }
@@ -5094,12 +5091,14 @@ int main (int argc, char **argv) {
             }
             break;
         case 'W':
-            weight_percent = atoi(optarg);
-            if(weight_percent<0 || weight_percent>100) {
+            if(strcmp(optarg,"0")==0)
+                settings.weight_percent=0;
+            else
+                settings.weight_percent = atoi(optarg);
+            if(settings.weight_percent<0 || settings.weight_percent>100) {
                 fprintf(stderr, "Weight percent valid values are between 0 and 100.\n");
                 return 1;
             }
-            weight_on = true;
             break;
         default:
             fprintf(stderr, "Illegal argument \"%c\"\n", c);
@@ -5231,14 +5230,6 @@ int main (int argc, char **argv) {
     assoc_init(settings.hashpower_init);
     conn_init();
     slabs_init(settings.maxbytes, settings.factor, preallocate);
-
-
-    /**
-     * update weight stats
-     */
-    stats.weight_on=weight_on;
-    if(weight_on)
-        stats.weight_percent=weight_percent;
 
 
     /*
