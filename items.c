@@ -83,9 +83,41 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
     *nsuffix = (uint8_t) snprintf(suffix, 40, " %d %d %d\r\n", flags, nbytes - 2,weight);
     return sizeof(item) + nkey + *nsuffix + nbytes;
 }
+/*********************************************************************/
 
+static item* search_item_evict(item* tail) {
+    int limit = (int) (10 / stats.cpu_percent + 0.9);
+    limit = limit > 100 ? 100 : limit;
+    uint8_t min_weight = 0;
+    item *min_item = NULL;
+    int i = 0;
+    for (i = 0; i < limit; i++) {
+        if (tail != NULL) {
+            if (refcount_incr(&(tail->refcount)) == 2) {
+                if(tail->exptime != 0 && tail->exptime < current_time){
+                    if(min_item!=NULL)
+                        refcount_decr(&(min_item->refcount));
+                    return tail;
+                }
+                if (min_item==NULL || tail->weight < min_weight) {
+                    if(min_item!=NULL)
+                        refcount_decr(&(min_item->refcount));
+                    min_item = tail;
+                    min_weight = tail->weight;
+                } else
+                    refcount_decr(&(tail->refcount));
+            } else
+                refcount_decr(&(tail->refcount));
+        } else
+            break;
+        tail = tail->prev;
+    }
+    return min_item;
+}
+
+/*********************************************************************/
 /*@null@*/
-item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_time_t exptime, const int nbytes
+ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_time_t exptime, const int nbytes
             ,const uint8_t weight) {
     uint8_t nsuffix;
     item *it = NULL;
@@ -105,9 +137,11 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
     rel_time_t oldest_live = settings.oldest_live;
 
     search = tails[id];
-    if (search != NULL && (refcount_incr(&search->refcount) == 2)) {
-        if ((search->exptime != 0 && search->exptime < current_time)
-            || (search->time <= oldest_live && oldest_live <= current_time)) {  // dead by flush
+    if (search != NULL) {
+        if (((refcount_incr(&search->refcount) == 2) && search->exptime != 0 &&
+             search->exptime < current_time)
+            || (search->time <= oldest_live &&
+                oldest_live <= current_time)) {  // dead by flush
             STATS_LOCK();
             stats.reclaimed++;
             STATS_UNLOCK();
@@ -119,52 +153,57 @@ item *do_item_alloc(char *key, const size_t nkey, const int flags, const rel_tim
                 itemstats[id].expired_unfetched++;
             }
             it = search;
-            slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
+            slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it),
+                                       ntotal);
             do_item_unlink_nolock(it, hash(ITEM_key(it), it->nkey, 0));
             /* Initialize the item block: */
             it->slabs_clsid = 0;
         } else if ((it = slabs_alloc(ntotal, id)) == NULL) {
-            if (settings.evict_to_free == 0) {
-                itemstats[id].outofmemory++;
-                mutex_unlock(&cache_lock);
-                return NULL;
-            }
-            itemstats[id].evicted++;
-            itemstats[id].evicted_time = current_time - search->time;
-            if (search->exptime != 0)
-                itemstats[id].evicted_nonzero++;
-            if ((search->it_flags & ITEM_FETCHED) == 0) {
+            refcount_decr(&search->refcount);
+            search = search_item_evict(tails[id]);
+            if (search != NULL) {
+                if (settings.evict_to_free == 0) {
+                    itemstats[id].outofmemory++;
+                    mutex_unlock(&cache_lock);
+                    return NULL;
+                }
+                itemstats[id].evicted++;
+                itemstats[id].evicted_time = current_time - search->time;
+                if (search->exptime != 0)
+                    itemstats[id].evicted_nonzero++;
+                if ((search->it_flags & ITEM_FETCHED) == 0) {
+                    STATS_LOCK();
+                    stats.evicted_unfetched++;
+                    STATS_UNLOCK();
+                    itemstats[id].evicted_unfetched++;
+                }
                 STATS_LOCK();
-                stats.evicted_unfetched++;
+                stats.evictions++;
                 STATS_UNLOCK();
-                itemstats[id].evicted_unfetched++;
-            }
-            STATS_LOCK();
-            stats.evictions++;
-            STATS_UNLOCK();
-            it = search;
-            slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it), ntotal);
-            do_item_unlink_nolock(it, hash(ITEM_key(it), it->nkey, 0));
-            /* Initialize the item block: */
-            it->slabs_clsid = 0;
+                it = search;
+                slabs_adjust_mem_requested(it->slabs_clsid, ITEM_ntotal(it),
+                                           ntotal);
+                do_item_unlink_nolock(it, hash(ITEM_key(it), it->nkey, 0));
+                /* Initialize the item block: */
+                it->slabs_clsid = 0;
 
-            /* If we've just evicted an item, and the automover is set to
-             * angry bird mode, attempt to rip memory into this slab class.
-             * TODO: Move valid object detection into a function, and on a
-             * "successful" memory pull, look behind and see if the next alloc
-             * would be an eviction. Then kick off the slab mover before the
-             * eviction happens.
-             */
-            if (settings.slab_automove == 2)
-                slabs_reassign(-1, id, 1);
+                /* If we've just evicted an item, and the automover is set to
+                 * angry bird mode, attempt to rip memory into this slab class.
+                 * TODO: Move valid object detection into a function, and on a
+                 * "successful" memory pull, look behind and see if the next alloc
+                 * would be an eviction. Then kick off the slab mover before the
+                 * eviction happens.
+                 */
+                if (settings.slab_automove == 2)
+                    slabs_reassign(-1, id, 1);
+            }
         } else {
             refcount_decr(&search->refcount);
         }
-    } else {
+    }
+    if(search == NULL) {
         /* If the LRU is empty or locked, attempt to allocate memory */
         it = slabs_alloc(ntotal, id);
-        if (search != NULL)
-            refcount_decr(&search->refcount);
     }
 
     if (it == NULL) {

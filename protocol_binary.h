@@ -221,9 +221,10 @@ extern "C"
             protocol_binary_response_header header;
             struct {
                 uint32_t flags;
+                uint8_t weight;
             } body;
         } message;
-        uint8_t bytes[sizeof(protocol_binary_response_header) + 4];
+        uint8_t bytes[sizeof(protocol_binary_response_header) + 5];
     } protocol_binary_response_get;
 
     typedef protocol_binary_response_get protocol_binary_response_getq;
@@ -274,9 +275,10 @@ extern "C"
             struct {
                 uint32_t flags;
                 uint32_t expiration;
+                uint8_t weight;
             } body;
         } message;
-        uint8_t bytes[sizeof(protocol_binary_request_header) + 8];
+        uint8_t bytes[sizeof(protocol_binary_request_header) + 9];
     } protocol_binary_request_set;
     typedef protocol_binary_request_set protocol_binary_request_add;
     typedef protocol_binary_request_set protocol_binary_request_replace;
@@ -313,9 +315,10 @@ extern "C"
                 uint64_t delta;
                 uint64_t initial;
                 uint32_t expiration;
+                uint8_t weight;
             } body;
         } message;
-        uint8_t bytes[sizeof(protocol_binary_request_header) + 20];
+        uint8_t bytes[sizeof(protocol_binary_request_header) + 21];
     } protocol_binary_request_incr;
     typedef protocol_binary_request_incr protocol_binary_request_decr;
 

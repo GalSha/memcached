@@ -14,6 +14,7 @@
  *      Brad Fitzpatrick <brad@danga.com>
  */
 #include "memcached.h"
+#include "protocol_binary.h"
 #include <sys/stat.h>
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -178,15 +179,14 @@ static void stats_init(void) {
     stats.accepting_conns = true; /* assuming we start in this state. */
     stats.slab_reassign_running = false;
 
+    stats.cpu_percent = 1;
+
     /* make the time we started always be 2 seconds before we really
        did, so time(0) - time.started is never zero.  if so, things
        like 'settings.oldest_live' which act as booleans as well as
        values are now false in boolean context... */
     process_started = time(0) - 2;
     stats_prefix_init();
-
-    stats.weight_on = false;
-    stats.weight_percent = 0;
 }
 
 static void stats_reset(void) {
@@ -229,6 +229,8 @@ static void settings_init(void) {
     settings.hashpower_init = 0;
     settings.slab_reassign = false;
     settings.slab_automove = 0;
+
+    settings.max_weight_time = -1;
 }
 
 /*
@@ -1091,7 +1093,7 @@ static void complete_incr_bin(conn *c) {
             /* Save some room for the response */
             rsp->message.body.value = htonll(req->message.body.initial);
             it = item_alloc(key, nkey, 0, realtime(req->message.body.expiration),
-                            INCR_MAX_STORAGE_LEN, -1); //TODO
+                            INCR_MAX_STORAGE_LEN, req->message.body.weight);
 
             if (it != NULL) {
                 snprintf(ITEM_data(it), INCR_MAX_STORAGE_LEN, "%llu",
@@ -1326,7 +1328,10 @@ static void process_bin_get(conn *c) {
         rsp->message.header.response.cas = htonll(ITEM_get_cas(it));
 
         // add the flags
-        rsp->message.body.flags = htonl(strtoul(ITEM_suffix(it), NULL, 10));
+        char* endptr =NULL;
+        rsp->message.body.flags = htonl(strtoul(ITEM_suffix(it), &endptr, 10));
+        strtoul(endptr, &endptr, 10);
+        rsp->message.body.weight = strtoul(endptr,NULL,10);
         add_iov(c, &rsp->message.body, sizeof(rsp->message.body));
 
         if (c->cmd == PROTOCOL_BINARY_CMD_GETK) {
@@ -1885,7 +1890,7 @@ static void dispatch_bin_command(conn *c) {
         case PROTOCOL_BINARY_CMD_SET: /* FALLTHROUGH */
         case PROTOCOL_BINARY_CMD_ADD: /* FALLTHROUGH */
         case PROTOCOL_BINARY_CMD_REPLACE:
-            if (extlen == 8 && keylen != 0 && bodylen >= (keylen + 8)) {
+            if (extlen == 9 && keylen != 0 && bodylen >= (keylen + 8)) {
                 bin_read_key(c, bin_reading_set_header, 8);
             } else {
                 protocol_error = 1;
@@ -1910,7 +1915,7 @@ static void dispatch_bin_command(conn *c) {
             break;
         case PROTOCOL_BINARY_CMD_INCREMENT:
         case PROTOCOL_BINARY_CMD_DECREMENT:
-            if (keylen > 0 && extlen == 20 && bodylen == (keylen + extlen)) {
+            if (keylen > 0 && extlen == 21 && bodylen == (keylen + extlen)) {
                 bin_read_key(c, bin_reading_incr_header, 20);
             } else {
                 protocol_error = 1;
@@ -2016,7 +2021,7 @@ static void process_bin_update(conn *c) {
     }
 
     it = item_alloc(key, nkey, req->message.body.flags,
-            realtime(req->message.body.expiration), vlen+2, -1); //TODO
+            realtime(req->message.body.expiration), vlen+2, req->message.body.weight);
 
     if (it == 0) {
         if (! item_size_ok(nkey, req->message.body.flags, vlen + 2)) {
@@ -2087,7 +2092,7 @@ static void process_bin_append_prepend(conn *c) {
         stats_prefix_record_set(key, nkey);
     }
 
-    it = item_alloc(key, nkey, 0, 0, vlen+2, -1); //TODO
+    it = item_alloc(key, nkey, 0, 0, vlen+2, -1);
 
     if (it == 0) {
         if (! item_size_ok(nkey, 0, vlen + 2)) {
@@ -2388,7 +2393,7 @@ typedef struct token_s {
 #define SUBCOMMAND_TOKEN 1
 #define KEY_TOKEN 1
 
-#define MAX_TOKENS 8
+#define MAX_TOKENS 9
 
 /*
  * Tokenize the command string by replacing whitespace with '\0' and update
@@ -2916,21 +2921,19 @@ static void process_update_command(conn *c, token_t *tokens, const size_t ntoken
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
-        if (ntokens > 7) {
-            if (!safe_strtoul(tokens[6].value, &weight32) || weight32 < 0 ||
-                weight32 > 255) {
-                out_string(c, "CLIENT_ERROR bad command line format");
-                return;
-            }
+        if (!safe_strtoul(tokens[6].value, &weight32) || weight32 < 0 ||
+            weight32 > 255) {
+            out_string(c, "CLIENT_ERROR bad command line format");
+            return;
         }
-    } else if(ntokens>6){
+    } else {
         if (!safe_strtoul(tokens[5].value, &weight32) || weight32<0 || weight32>255) {
             out_string(c, "CLIENT_ERROR bad command line format");
             return;
         }
     }
 
-    vlen += 2;
+        vlen += 2;
     if (vlen < 0 || vlen - 2 < 0) {
         out_string(c, "CLIENT_ERROR bad command line format");
         return;
@@ -3285,6 +3288,23 @@ static void process_maxmegabytes_command(conn *c, token_t *tokens, const size_t 
     return;
 }
 
+static void process_maxcpu_command(conn *c, token_t *tokens, const size_t ntokens) {
+
+    int32_t new_cpu;
+
+    assert(c != NULL);
+
+    set_noreply_maybe(c, tokens, ntokens);
+
+    if (!safe_strtol(tokens[COMMAND_TOKEN+1].value, &new_cpu) || new_cpu<1 || new_cpu>100) {
+        out_string(c, "CLIENT_ERROR new cpu limit must be between 1 and 100");
+        return;
+    }
+
+    stats.cpu_percent=((double) (*(int*)(&new_cpu)))/100; //inorder to make cast warnning disappear
+    out_string(c, "OK");
+}
+
 
 static void process_command(conn *c, char *command) {
 
@@ -3319,7 +3339,7 @@ static void process_command(conn *c, char *command) {
 
         process_get_command(c, tokens, ntokens, false);
 
-    } else if ((ntokens == 6 || ntokens == 7 || ntokens==8) &&
+    } else if ((ntokens == 7 || ntokens==8) &&
                ((strcmp(tokens[COMMAND_TOKEN].value, "add") == 0 && (comm = NREAD_ADD)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "set") == 0 && (comm = NREAD_SET)) ||
                 (strcmp(tokens[COMMAND_TOKEN].value, "replace") == 0 && (comm = NREAD_REPLACE)) ||
@@ -3328,7 +3348,7 @@ static void process_command(conn *c, char *command) {
 
         process_update_command(c, tokens, ntokens, comm, false);
 
-    } else if ((ntokens == 7 || ntokens == 8) && (strcmp(tokens[COMMAND_TOKEN].value, "cas") == 0 && (comm = NREAD_CAS))) {
+    } else if ((ntokens == 8 || ntokens==9) && (strcmp(tokens[COMMAND_TOKEN].value, "cas") == 0 && (comm = NREAD_CAS))) {
 
         process_update_command(c, tokens, ntokens, comm, true);
 
@@ -3459,6 +3479,8 @@ static void process_command(conn *c, char *command) {
         }
     } else if (ntokens == 3  && (strcmp(tokens[COMMAND_TOKEN].value, "m") == 0)) {
         process_maxmegabytes_command(c, tokens, ntokens);
+    } else if ((ntokens == 3 || ntokens == 4)  && (strcmp(tokens[COMMAND_TOKEN].value, "cpu") == 0)) {
+        process_maxcpu_command(c, tokens, ntokens);
     } else if ((ntokens == 3 || ntokens == 4) && (strcmp(tokens[COMMAND_TOKEN].value, "verbosity") == 0)) {
         process_verbosity_command(c, tokens, ntokens);
     } else {
@@ -4864,7 +4886,7 @@ int main (int argc, char **argv) {
           "I:"  /* Max item size */
           "S"   /* Sasl ON */
           "o:"  /* Extended generic options */
-          "W:"  /* Weight percent */
+          "W:"  /* Max weight exec time */
         ))) {
         switch (c) {
         case 'a':
@@ -5091,12 +5113,10 @@ int main (int argc, char **argv) {
             }
             break;
         case 'W':
-            if(strcmp(optarg,"0")==0)
-                settings.weight_percent=0;
-            else
-                settings.weight_percent = atoi(optarg);
-            if(settings.weight_percent<0 || settings.weight_percent>100) {
-                fprintf(stderr, "Weight percent valid values are between 0 and 100.\n");
+            settings.max_weight_time = atoi(optarg);
+            if(settings.max_weight_time<=0 || settings.max_weight_time>INT_MAX) {
+                fprintf(stderr, "Max weight execution time must be a positive value between 1 and %d.\n",
+                INT_MAX);
                 return 1;
             }
             break;
@@ -5191,6 +5211,14 @@ int main (int argc, char **argv) {
             exit(EX_OSERR);
         }
     }
+
+
+    /* check max weight exec time is given */
+    if(settings.max_weight_time==-1) {
+        fprintf(stderr, "-W flag must be used and valid\n");
+        exit(EX_USAGE);
+    }
+
 
     /* Initialize Sasl if -S was specified */
     if (settings.sasl) {
