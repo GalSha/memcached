@@ -308,7 +308,7 @@ struct settings {
     int slab_automove;     /* Whether or not to automatically move slabs */
     int hashpower_init;     /* Starting hash power level */
 
-    int max_weight_time; /*How much time does it take to the max weight object to execute in ms*/
+    bool weight_on;          /*does wieght feature on or off*/
 };
 
 extern struct stats stats;

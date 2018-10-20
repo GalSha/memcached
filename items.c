@@ -88,6 +88,8 @@ static size_t item_make_header(const uint8_t nkey, const int flags, const int nb
 static item* search_item_evict(item* tail) {
     int limit = (int) (10 / stats.cpu_percent + 0.9);
     limit = limit > 100 ? 100 : limit;
+    if(settings.weight_on==false)
+        limit = 1;
     uint8_t min_weight = 0;
     item *min_item = NULL;
     int i = 0;

@@ -229,8 +229,7 @@ static void settings_init(void) {
     settings.hashpower_init = 0;
     settings.slab_reassign = false;
     settings.slab_automove = 0;
-
-    settings.max_weight_time = -1;
+    settings.weight_on = true;
 }
 
 /*
@@ -1330,8 +1329,8 @@ static void process_bin_get(conn *c) {
         // add the flags
         char* endptr =NULL;
         rsp->message.body.flags = htonl(strtoul(ITEM_suffix(it), &endptr, 10));
-        strtoul(endptr, &endptr, 10);
-        rsp->message.body.weight = strtoul(endptr,NULL,10);
+        rsp->message.body.weight = strtoul(endptr, &endptr, 10); //nbytes read - not needed
+        rsp->message.body.weight = strtoul(endptr,NULL,10); // weight read
         add_iov(c, &rsp->message.body, sizeof(rsp->message.body));
 
         if (c->cmd == PROTOCOL_BINARY_CMD_GETK) {
@@ -4604,8 +4603,7 @@ static void usage(void) {
 #ifdef ENABLE_SASL
     printf("-S            Turn on Sasl authentication\n");
 #endif
-    printf("-W <num>      The percent which the weight parameter takes in the invalidate \n"
-                   "              decision.\n");
+    printf("-w <on/off>   Set weight feature: on or off (default: on).\n");
     printf("-o            Comma separated list of extended or experimental options\n"
            "              - (EXPERIMENTAL) maxconns_fast: immediately close new\n"
            "                connections if over maxconns limit\n"
@@ -4886,7 +4884,7 @@ int main (int argc, char **argv) {
           "I:"  /* Max item size */
           "S"   /* Sasl ON */
           "o:"  /* Extended generic options */
-          "W:"  /* Max weight exec time */
+          "w:" /*weight feature*/
         ))) {
         switch (c) {
         case 'a':
@@ -5065,6 +5063,17 @@ int main (int argc, char **argv) {
 #endif
             settings.sasl = true;
             break;
+        case 'w':
+            if (strcmp(optarg, "on") == 0) {
+                settings.weight_on = true;
+            } else if (strcmp(optarg, "off") == 0) {
+                settings.weight_on = false;
+            } else {
+                fprintf(stderr, "Invalid value for weight feature: %s\n"
+                        " -- should be on or off.\n", optarg);
+                exit(EX_USAGE);
+            }
+            break;
         case 'o': /* It's sub-opts time! */
             subopts = optarg;
 
@@ -5110,14 +5119,6 @@ int main (int argc, char **argv) {
                 return 1;
             }
 
-            }
-            break;
-        case 'W':
-            settings.max_weight_time = atoi(optarg);
-            if(settings.max_weight_time<=0 || settings.max_weight_time>INT_MAX) {
-                fprintf(stderr, "Max weight execution time must be a positive value between 1 and %d.\n",
-                INT_MAX);
-                return 1;
             }
             break;
         default:
@@ -5212,12 +5213,6 @@ int main (int argc, char **argv) {
         }
     }
 
-
-    /* check max weight exec time is given */
-    if(settings.max_weight_time==-1) {
-        fprintf(stderr, "-W flag must be used and valid\n");
-        exit(EX_USAGE);
-    }
 
 
     /* Initialize Sasl if -S was specified */
