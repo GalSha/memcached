@@ -229,7 +229,7 @@ static void settings_init(void) {
     settings.hashpower_init = 0;
     settings.slab_reassign = false;
     settings.slab_automove = 0;
-    settings.weight_on = true;
+    settings.weight_on = false;
 }
 
 /*
